@@ -1,58 +1,132 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import argparse
-from glob import glob
 import exifread
 import os
+from datetime import timezone
 
-def rename(path):
+from hachoir.parser import createParser
+from hachoir.metadata import extractMetadata
+
+
+def get_new_unique_filename(pathName, n=None):
+    if not os.path.exists(pathName):
+        return pathName
+
+    fPath, name = os.path.split(pathName)
+    nameOnly, ext = os.path.splitext(name)
+
+    if n is None:
+        n = 1
+    else:
+        n = n + 1
+
+    newName = '%s_%s%s' % (nameOnly, n, ext)
+    return get_new_unique_filename(os.path.join(fPath, newName), n)
+
+
+def get_media_files(path, exts):
     files = []
+
     for file in os.listdir(path):
         fPath, nameOnly = os.path.split(file)
-        if nameOnly.lower().endswith('.jpg') or nameOnly.lower().endswith('.png'):
-            files.append(os.path.join(path, file))
+        for ext in exts:
+            if nameOnly.lower().endswith(ext.lower()):
+                files.append(os.path.join(path, file))
+                break
+    return files
 
-    for file in files:
-        exif = None
-        with open(file, 'rb') as f:
-            exif = exifread.process_file(f)
 
-        if exif is None:
-            print('%s has no Exif, skipping' % file)
+def normalise_datetime(date_time):
+    return date_time.replace('-', '.').replace(':', '.')
+
+
+def get_image_file_created_date_time(file_name):
+
+    exif = None
+    with open(file_name, 'rb') as f:
+        exif = exifread.process_file(f)
+
+    if exif is None:
+        print('%s has no Exif, skipping' % file_name)
+        return None
+
+    keyStr = 'EXIF DateTimeOriginal'
+    if keyStr not in exif:
+        print('%s has no date tag, skipping' % file_name)
+        #print(exif)
+        return None
+    created_date_time = exif[keyStr]
+
+    created_date_time = created_date_time.values
+    if len(created_date_time) != 19:
+        print('Invalid created_date_time: %s' % file_name)
+        return None
+
+    return created_date_time.replace(':', '.')
+
+
+def get_video_file_created_date_time(file_name):
+    parser = createParser(file_name)
+
+    metadata = extractMetadata(parser, 1.0)
+    if not metadata:
+        return None
+
+    m_item = metadata.getItems('creation_date')
+    utc_dt = m_item.values[0].value
+    local_dt = utc_dt.replace(tzinfo=timezone.utc).astimezone(tz=None)
+
+    return local_dt.strftime('%Y.%m.%d %H.%M.%S')
+
+
+def is_image_file(ext):
+    return ext.lower() in ['.png', '.jpg', '.jpeg']
+
+
+def get_file_created_date_time(file_name):
+
+    _, ext = os.path.splitext(file_name)
+
+    if is_image_file(ext):
+        return get_image_file_created_date_time(file_name)
+        pass
+    else:
+        return get_video_file_created_date_time(file_name)
+
+
+def rename_photos(path, is_real_rename):
+    files = get_media_files(path, ['png', 'jpg', 'jpeg', 'mp4', 'mov', 'mpg'])
+
+    for file_name in files:
+        #print('Processing %s' % file_name)
+
+        created_date_time = get_file_created_date_time(file_name)
+        if created_date_time is None:
             continue
 
-        keyStr = 'EXIF DateTimeOriginal'
-        if not exif.has_key(keyStr):
-            print('%s has no date tag, skipping' % file)
-            #print(exif)
+        _, ext = os.path.splitext(file_name)
+        new_file_name = '%s%s' % (created_date_time, ext.lower())
+        new_path_file_name = os.path.join(os.path.dirname(file_name), new_file_name)
+
+        if new_path_file_name == file_name:
+            #print('No need to rename, skipping...')
             continue
 
-        datetime = exif[keyStr]
+        if os.path.exists(new_path_file_name):
+            print('Would rename %s to %s but it already exists, generating new name...' % (file_name, new_path_file_name))
+            new_path_file_name = get_new_unique_filename(new_path_file_name)
 
-        datetime = datetime.values
-        if len(datetime) != 19:
-            print('Invalid datetime')
-            continue
+        print('%s -> %s' % (os.path.split(file_name)[1], os.path.split(new_path_file_name)[1]))
 
-        fPath, nameOnly = os.path.split(file)
-        if nameOnly.lower().endswith('.jpg'):
-            ext = 'jpg'
-        elif nameOnly.lower().startswith('.png'):
-            ext = 'png'
-        else:
-            path, ext = os.path.splitext(file)
+        if is_real_rename:
+            os.rename(file_name, new_path_file_name)
 
-        newFileName = '%s.%s' % (datetime.replace(':', '.'), ext)
-        newPathFileName = os.path.join(os.path.dirname(file), newFileName)
-
-        if os.path.exists(newPathFileName):
-            continue
-
-        print('Renaming %s to %s' % (file, newPathFileName))
-        os.rename(file, newPathFileName)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('path', metavar='path', type=str,
+    parser.add_argument('--rename', action='store_true',
+                         help='Actually rename, don''t just do a dry run')
+    parser.add_argument('path', metavar='/path/to/folder/', type=str,
                          help='folder to path with photos')
     args = parser.parse_args()
-    rename(**vars(args))
+    rename_photos(args.path, args.rename)
