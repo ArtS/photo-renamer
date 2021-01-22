@@ -128,7 +128,7 @@ def get_file_created_date_time(file_name):
 
 
 def rename_photos(path, is_real_rename, is_recursive):
-    files = get_media_files_recursive(path, is_recursive, ['png', 'jpg', 'jpeg', 'mv4', 'mp4', 'mov', 'mpg'])
+    files = get_media_files_recursive(path, is_recursive, ['png', 'jpg', 'jpeg', 'm4v', 'mp4', 'mov', 'mpg'])
 
     for file_name in files:
 
