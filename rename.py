@@ -2,32 +2,37 @@
 import argparse
 import exifread
 import os
+import re
 from datetime import timezone
 
 from hachoir.parser import createParser
 from hachoir.metadata import extractMetadata
 
+pattern = re.compile('(.*)_(\d+)$')
 
-def get_new_unique_filename(pathName, n=None):
+def get_new_unique_filename(pathName, n=0):
     if not os.path.exists(pathName):
         return pathName
 
-    fPath, name = os.path.split(pathName)
-    nameOnly, ext = os.path.splitext(name)
+    fPath, nameAndExt = os.path.split(pathName)
+    origFileName, ext = os.path.splitext(nameAndExt)
 
-    if n is None:
-        n = 1
+    baseFileName = ''
+    parsedFileName = pattern.findall(origFileName)
+    if parsedFileName:
+        baseFileName = parsedFileName[0][0]
+        n = int(parsedFileName[0][1])
     else:
-        n = n + 1
+        baseFileName = origFileName
 
-    newName = '%s_%s%s' % (nameOnly, n, ext)
+    n = n + 1
+
+    newName = '%s_%s%s' % (baseFileName, n, ext)
     return get_new_unique_filename(os.path.join(fPath, newName), n)
 
-
-def get_media_files(path, exts):
+def get_media_files(path, allFileNames, exts):
     files = []
-
-    for file in os.listdir(path):
+    for file in allFileNames:
         fPath, nameOnly = os.path.split(file)
         for ext in exts:
             if nameOnly.lower().endswith(ext.lower()):
@@ -35,9 +40,30 @@ def get_media_files(path, exts):
                 break
     return files
 
+def get_media_files_recursive(path, is_recursive, exts):
+    print('processing: %s' % path)
+    files = []
+
+    for root, subdirs, allFileNames in os.walk(path):
+        print('Root: ', root)
+        if (not is_recursive and root != '.'):
+            print('Skipping %s as not recursive', root)
+            continue
+        files.extend(get_media_files(root, allFileNames, exts))
+
+    return files
+
 
 def normalise_datetime(date_time):
     return date_time.replace('-', '.').replace(':', '.')
+
+
+def try_get_exif_tag(file_name, tag_name, exif):
+    if tag_name not in exif:
+        print('%s has no tag "%s"' % (file_name, tag_name))
+        return None
+
+    return exif[tag_name]
 
 
 def get_image_file_created_date_time(file_name):
@@ -50,12 +76,19 @@ def get_image_file_created_date_time(file_name):
         print('%s has no Exif, skipping' % file_name)
         return None
 
-    keyStr = 'EXIF DateTimeOriginal'
-    if keyStr not in exif:
-        print('%s has no date tag, skipping' % file_name)
+    #for k in exif:
+    #    print('%s: %s' % (k, exif[k]))
+
+    key_str = 'EXIF DateTimeOriginal'
+    created_date_time = try_get_exif_tag(file_name, key_str, exif)
+
+    fallback_key_str = 'Image DateTime'
+    if not created_date_time or created_date_time.values == '0000:00:00 00:00:00':
+        created_date_time = try_get_exif_tag(file_name, fallback_key_str, exif)
+
+    if not created_date_time:
         #print(exif)
         return None
-    created_date_time = exif[keyStr]
 
     created_date_time = created_date_time.values
     if len(created_date_time) != 19:
@@ -94,11 +127,10 @@ def get_file_created_date_time(file_name):
         return get_video_file_created_date_time(file_name)
 
 
-def rename_photos(path, is_real_rename):
-    files = get_media_files(path, ['png', 'jpg', 'jpeg', 'mp4', 'mov', 'mpg'])
+def rename_photos(path, is_real_rename, is_recursive):
+    files = get_media_files_recursive(path, is_recursive, ['png', 'jpg', 'jpeg', 'mv4', 'mp4', 'mov', 'mpg'])
 
     for file_name in files:
-        #print('Processing %s' % file_name)
 
         created_date_time = get_file_created_date_time(file_name)
         if created_date_time is None:
@@ -116,6 +148,7 @@ def rename_photos(path, is_real_rename):
             print('Would rename %s to %s but it already exists, generating new name...' % (file_name, new_path_file_name))
             new_path_file_name = get_new_unique_filename(new_path_file_name)
 
+        print('%s -> %s' % (file_name, os.path.split(new_path_file_name)[1]))
         print('%s -> %s' % (os.path.split(file_name)[1], os.path.split(new_path_file_name)[1]))
 
         if is_real_rename:
@@ -124,9 +157,12 @@ def rename_photos(path, is_real_rename):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    # store_true sets true only when option is specifies
+    parser.add_argument('--recursive', action='store_true',
+                         help='Process all folders and subfolders in the given path')
     parser.add_argument('--rename', action='store_true',
                          help='Actually rename, don''t just do a dry run')
     parser.add_argument('path', metavar='/path/to/folder/', type=str,
                          help='folder to path with photos')
     args = parser.parse_args()
-    rename_photos(args.path, args.rename)
+    rename_photos(args.path, args.rename, args.recursive)
